@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Radium Particles — Wave</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#ffffff;overflow:hidden}
+#c{position:fixed;top:0;left:0;width:100%;height:100%}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script type="importmap">
+{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.163.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.163.0/examples/jsm/","simplex-noise":"https://esm.sh/simplex-noise@4.0.1"}}
+</script>
+<script type="module">
+import*as THREE from'three';
+import{OrbitControls}from'three/addons/controls/OrbitControls.js';
+import{EffectComposer}from'three/addons/postprocessing/EffectComposer.js';
+import{RenderPass}from'three/addons/postprocessing/RenderPass.js';
+import{UnrealBloomPass}from'three/addons/postprocessing/UnrealBloomPass.js';
+import{createNoise3D,createNoise4D}from'simplex-noise';
+
+// === CONFIG (edit these to customize) ===
+const CONFIG = {
+  "shape": "wave",
+  "shapeName": "Wave",
+  "params": {
+    "n": 15000,
+    "sz": 14,
+    "sMin": 0.25,
+    "sMax": 0.25,
+    "sV": 0.6,
+    "orbSpd": 0,
+    "vOrbSpd": 0,
+    "tLen": 12,
+    "tFade": 0.8,
+    "tSpread": 1,
+    "tInt": 1,
+    "gS": 1,
+    "aN": 3,
+    "eS": 2,
+    "eSpd": 0.3,
+    "vSpd": 5,
+    "vSpawn": false,
+    "vTwist": 8,
+    "wSpd": 2,
+    "wAmp": 0.5,
+    "wRings": 5,
+    "wHole": 50,
+    "tThick": 28,
+    "distOrder": 0,
+    "cylH": 80,
+    "cylDist": 0,
+    "bS": 0,
+    "bR": 0.5,
+    "bT": 0.05,
+    "iS": 0,
+    "iSp": 0.08,
+    "mD": 2000
+  },
+  "camPos": {
+    "x": 0,
+    "y": 1.0567084027028659e-15,
+    "z": 17.257357851073262
+  },
+  "bgHex": "ffffff",
+  "dotHex": "585449",
+  "isLight": true,
+  "sfVal": 0,
+  "vOrbAngle": 0,
+  "renderMode": "points",
+  "repelStr": 0.03,
+  "repelRad": 0.08,
+  "interactMode": 0
+};
+
+const K=CONFIG.params;
+const n3=createNoise3D(()=>Math.random());
+const n4=createNoise4D(()=>Math.random());
+const _t=new THREE.Vector3();
+const tv=new THREE.Vector3(),sv=new THREE.Vector3(),cv=new THREE.Vector3(),fv=new THREE.Vector3();
+
+// === SHAPE GENERATOR ===
+
+function genWave(n,s){const p=new Float32Array(n*3);const hole=K.wHole/100;for(let i=0;i<n;i++){const a=Math.random()*Math.PI*2,r=Math.sqrt(hole*hole+(1-hole*hole)*Math.random())*s;p[i*3]=Math.cos(a)*r;p[i*3+1]=Math.sin(a)*r;p[i*3+2]=Math.sin(r/s*Math.PI*5)*s*.25*(1-r/s*.6);}return p;}
+
+
+
+// === TEXTURES ===
+function ptTex(){const s=64,c=document.createElement('canvas');c.width=s;c.height=s;const x=c.getContext('2d'),g=x.createRadialGradient(s/2,s/2,0,s/2,s/2,s/2);g.addColorStop(0,'rgba(255,255,255,1)');g.addColorStop(.2,'rgba(255,255,255,.8)');g.addColorStop(.5,'rgba(255,255,255,.3)');g.addColorStop(1,'rgba(255,255,255,0)');x.fillStyle=g;x.fillRect(0,0,s,s);return new THREE.CanvasTexture(c);}
+function ptTexOpaque(){const s=64,c=document.createElement('canvas');c.width=s;c.height=s;const x=c.getContext('2d'),g=x.createRadialGradient(s/2,s/2,0,s/2,s/2,s/2);g.addColorStop(0,'rgba(255,255,255,1)');g.addColorStop(.45,'rgba(255,255,255,1)');g.addColorStop(.5,'rgba(255,255,255,.6)');g.addColorStop(.65,'rgba(255,255,255,0)');g.addColorStop(1,'rgba(255,255,255,0)');x.fillStyle=g;x.fillRect(0,0,s,s);return new THREE.CanvasTexture(c);}
+
+// === INIT ===
+async function init(){
+const canvas=document.getElementById('c');
+const scene=new THREE.Scene();
+scene.fog=new THREE.FogExp2(new THREE.Color('#'+CONFIG.bgHex),CONFIG.isLight?0:0.03);
+const cam=new THREE.PerspectiveCamera(70,window.innerWidth/window.innerHeight,.1,1000);
+cam.position.set(CONFIG.camPos.x,CONFIG.camPos.y,CONFIG.camPos.z);
+const ren=new THREE.WebGLRenderer({canvas,antialias:true,alpha:true,powerPreference:'high-performance'});
+ren.setSize(window.innerWidth,window.innerHeight);
+ren.setPixelRatio(Math.min(window.devicePixelRatio,2));
+ren.outputColorSpace=THREE.SRGBColorSpace;
+ren.toneMapping=CONFIG.isLight?THREE.NoToneMapping:THREE.ACESFilmicToneMapping;
+ren.toneMappingExposure=CONFIG.isLight?1:1.1;
+
+// Background via scene.background
+{const c=new THREE.Color();
+if(!CONFIG.isLight){
+const sr=parseInt(CONFIG.bgHex.substr(0,2),16)/255;
+const sg=parseInt(CONFIG.bgHex.substr(2,2),16)/255;
+const sb=parseInt(CONFIG.bgHex.substr(4,2),16)/255;
+function srgbToLin(v){return v<=0.04045?v/12.92:Math.pow((v+0.055)/1.055,2.4);}
+const lr=srgbToLin(sr),lg=srgbToLin(sg),lb=srgbToLin(sb);
+function invACES(y){if(y<=0)return 0;if(y>=1)return 16;let x=y;for(let i=0;i<20;i++){const num=x*(2.51*x+0.03);const den=x*(2.43*x+0.59)+0.14;const f=num/den-y;const dnum=5.02*x+0.03;const dden=4.86*x+0.59;const df=(dnum*den-num*dden)/(den*den);if(Math.abs(df)<1e-10)break;x-=f/df;x=Math.max(0,x);}return x;}
+c.setRGB(invACES(lr),invACES(lg),invACES(lb));
+}else{c.set('#'+CONFIG.bgHex);}
+scene.background=c;}
+
+// Post-processing
+const comp=new EffectComposer(ren);
+const rp=new RenderPass(scene,cam);
+comp.addPass(rp);
+const bloom=new UnrealBloomPass(new THREE.Vector2(window.innerWidth,window.innerHeight),CONFIG.isLight?0:K.bS,K.bR,CONFIG.isLight?999:K.bT);
+comp.addPass(bloom);
+
+// Controls
+const ctrl=new OrbitControls(cam,ren.domElement);
+ctrl.enableDamping=true;ctrl.dampingFactor=.05;
+ctrl.enableZoom=false;ctrl.enablePan=false;ctrl.enableRotate=false;
+ctrl.autoRotate=K.orbSpd!==0;ctrl.autoRotateSpeed=K.orbSpd;
+
+// Mouse repel
+const _mouseNDC=new THREE.Vector2(-999,-999);
+const _mouseWorld=new THREE.Vector3();
+let _mouseActive=false;
+const _mouseRaycaster=new THREE.Raycaster();
+const _mousePlane=new THREE.Plane(new THREE.Vector3(0,0,1),0);
+const _repelStr=CONFIG.repelStr;
+const _repelRad=CONFIG.repelRad;
+const _interactMode=CONFIG.interactMode;
+const isWaveShape=CONFIG.shapeName==='Wave';
+const tw=new THREE.Vector3();
+
+canvas.addEventListener('mousemove',e=>{
+const rect=canvas.getBoundingClientRect();
+_mouseNDC.x=((e.clientX-rect.left)/rect.width)*2-1;
+_mouseNDC.y=-((e.clientY-rect.top)/rect.height)*2+1;
+_mouseActive=true;
+if(isWaveShape){_mousePlane.normal.set(0,0,1);_mousePlane.constant=0;}
+else{const cd=new THREE.Vector3();cam.getWorldDirection(cd);_mousePlane.normal.copy(cd).negate();_mousePlane.constant=-_mousePlane.normal.dot(ctrl.target);}
+_mouseRaycaster.setFromCamera(_mouseNDC,cam);
+const hit=new THREE.Vector3();
+_mouseRaycaster.ray.intersectPlane(_mousePlane,hit);
+if(hit)_mouseWorld.copy(hit);
+});
+canvas.addEventListener('mouseleave',()=>{_mouseActive=false;_mouseNDC.set(-999,-999);});
+
+// Lights
+scene.add(new THREE.AmbientLight(0x404060));
+const d1=new THREE.DirectionalLight(0xffffff,1.5);d1.position.set(15,20,10);scene.add(d1);
+const d2=new THREE.DirectionalLight(0x88aaff,.9);d2.position.set(-15,-10,-15);scene.add(d2);
+
+// Stars
+
+
+// Generate shape
+let shapeData;
+shapeData=genWave(K.n,K.sz);
+
+// Particles
+const pG=new THREE.BufferGeometry();
+const cP=new Float32Array(shapeData);
+const sP=new Float32Array(shapeData);
+pG.setAttribute('position',new THREE.BufferAttribute(cP,3));
+const pSz=new Float32Array(K.n);const pOp=new Float32Array(K.n);const pEf=new Float32Array(K.n);
+for(let i=0;i<K.n;i++){pSz[i]=THREE.MathUtils.randFloat(K.sMin,K.sMax);pOp[i]=1;pEf[i]=0;}
+pG.setAttribute('size',new THREE.BufferAttribute(pSz,1));
+pG.setAttribute('opacity',new THREE.BufferAttribute(pOp,1));
+pG.setAttribute('aEff',new THREE.BufferAttribute(pEf,1));
+const cols=new Float32Array(K.n*3);
+const dotC=new THREE.Color('#'+CONFIG.dotHex);
+for(let i=0;i<K.n;i++)dotC.toArray(cols,i*3);
+pG.setAttribute('color',new THREE.BufferAttribute(cols,3));
+
+const tex=CONFIG.isLight?ptTexOpaque():ptTex();
+const pM=new THREE.ShaderMaterial({
+uniforms:{pt:{value:tex},uLightMode:{value:CONFIG.isLight?1.0:0.0}},
+vertexShader:'attribute float size;attribute float opacity;attribute float aEff;varying vec3 vC;varying float vO;varying float vE;void main(){vC=color;vO=opacity;vE=aEff;vec4 mv=modelViewMatrix*vec4(position,1.);gl_PointSize=size*(1.-vE*.5)*(400./-mv.z);gl_Position=projectionMatrix*mv;}',
+fragmentShader:'uniform sampler2D pt;uniform float uLightMode;varying vec3 vC;varying float vO;varying float vE;void main(){float a=texture2D(pt,gl_PointCoord).a;if(a<.05)discard;vec3 fc=vC*(1.+vE*.6);float finalA=mix(a*vO, step(.3,a)*vO, uLightMode);gl_FragColor=vec4(fc,finalA);}',
+blending:CONFIG.isLight?THREE.NormalBlending:THREE.AdditiveBlending,
+depthTest:true,depthWrite:false,transparent:true,vertexColors:true});
+
+const pivot=new THREE.Group();
+const pS=new THREE.Points(pG,pM);
+pivot.add(pS);scene.add(pivot);
+let vOrbAngle=CONFIG.vOrbAngle||0;
+pivot.rotation.x=vOrbAngle;
+
+// Resize
+function onResize(){const w=window.innerWidth,h=window.innerHeight;ren.setSize(w,h);ren.setPixelRatio(Math.min(window.devicePixelRatio,2));cam.aspect=w/h;cam.updateProjectionMatrix();comp.setSize(w,h);}
+window.addEventListener('resize',onResize);
+
+// Animate
+const clk=new THREE.Clock();
+let _elapsed=0;
+
+function animate(){
+requestAnimationFrame(animate);
+const dt=Math.min(clk.getDelta(),.05);
+_elapsed+=dt;
+ctrl.update();
+if(K.vOrbSpd!==0){vOrbAngle+=dt*K.vOrbSpd*Math.PI/30;pivot.rotation.x=vOrbAngle;}
+
+const pos=pG.attributes.position.array;
+
+// Idle update
+const lt=_elapsed;
+const br=1+Math.sin(lt*.5)*.003;
+const ts=lt*K.iSp;
+const freq=.1;
+const lerpRate=0.08;
+
+for(let i=0;i<K.n;i++){const i3=i*3;sv.fromArray(sP,i3);
+const d=Math.sqrt(sv.x*sv.x+sv.y*sv.y)/K.sz;
+const wv=Math.sin(d*Math.PI*K.wRings-lt*K.wSpd)*K.sz*.25*K.wAmp*(1-d*.6);
+tv.set(sv.x,sv.y,wv);
+cv.fromArray(pos,i3);cv.lerp(tv,lerpRate);
+if(_mouseActive&&_interactMode===0){
+const mdx=cv.x-_mouseWorld.x,mdy=cv.y-_mouseWorld.y;
+const mDist=Math.sqrt(mdx*mdx+mdy*mdy);
+const mRadius=K.sz*_repelRad;
+if(mDist<mRadius&&mDist>0.01){
+const mForce=Math.pow(1-mDist/mRadius,2)*K.sz*_repelStr;
+cv.x+=mdx/mDist*mForce;cv.y+=mdy/mDist*mForce;}}
+pos[i3]=cv.x;pos[i3+1]=cv.y;pos[i3+2]=cv.z;}
+
+pG.attributes.position.needsUpdate=true;
+comp.render(dt);
+}
+animate();
+}
+init();
+</script>
+</body>
+</html>
