@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Model Foundation</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+html, body { width:100%; height:100%; overflow:hidden; font-family:'JetBrains Mono', monospace; }
+#foundation-container { position:relative; width:100%; height:100%; }
+#foundation-canvas { display:block; width:100%; height:100%; }
+#foundation-labels { position:absolute; inset:0; pointer-events:none; }
+</style>
+</head>
+<body>
+<div id="foundation-container">
+  <canvas id="foundation-canvas"></canvas>
+  <svg id="foundation-labels" xmlns="http://www.w3.org/2000/svg"></svg>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+/* Model Foundation — standalone. Replace CONFIG to customize.
+   Animation triggers on viewport entry. Manual: window.foundationPlay() */
+const CONFIG = {
+  "mode": "foundation",
+  "camera": {
+    "fov": 22,
+    "distance": 14.8,
+    "tilt": 31,
+    "tiltStart": 90,
+    "tiltEnd": 31
+  },
+  "geometry": {
+    "modelR": 0.75,
+    "modelH": 0.08,
+    "starR": 1.2,
+    "rotation": 0,
+    "gapY": 1.25,
+    "radiumPad": 0.4,
+    "radiumH": 0.1
+  },
+  "labels": {
+    "show": true,
+    "modelSize": 14,
+    "radiumSize": 22,
+    "radiumOffset": 60,
+    "radiumLabel": "RADIUM"
+  },
+  "background": "#FFFFFF",
+  "models": [
+    {
+      "name": "Model 1"
+    },
+    {
+      "name": "Model 2"
+    },
+    {
+      "name": "Model 3"
+    },
+    {
+      "name": "Model 4"
+    }
+  ],
+  "animation": {
+    "modelDur": 1.4,
+    "modelGap": 0.55,
+    "radiumDur": 1.8
+  }
+};
+const PAL = {g900:'#242220', g700:'#585449', blueFace:'#0000CC', blueEdge:'#5A64FF'};
+const TH = {fop:0.12, eop:0.28, rop:1, rw:0.002};
+document.body.style.background = CONFIG.background;
+
+const canvas = document.getElementById('foundation-canvas');
+const svg = document.getElementById('foundation-labels');
+const renderer = new THREE.WebGLRenderer({canvas, antialias:true, alpha:true});
+renderer.setPixelRatio(devicePixelRatio);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(CONFIG.background);
+scene.add(new THREE.AmbientLight(0xffffff, 0.85));
+const kl = new THREE.DirectionalLight(0xffffff, 0.5); kl.position.set(3,5,4); scene.add(kl);
+const camera = new THREE.PerspectiveCamera(CONFIG.camera.fov, 1, 0.01, 1000);
+const group = new THREE.Group(); scene.add(group);
+
+function resize(){
+  const c = document.getElementById('foundation-container');
+  const w = c.clientWidth, h = c.clientHeight;
+  renderer.setSize(w, h);
+  camera.aspect = w/h; camera.updateProjectionMatrix();
+  svg.setAttribute('width', w); svg.setAttribute('height', h);
+  svg.setAttribute('viewBox', '0 0 '+w+' '+h);
+}
+window.addEventListener('resize', resize); resize();
+
+function mkMat(col, op){
+  return new THREE.MeshStandardMaterial({color: new THREE.Color(col), roughness:0.6, metalness:0.05,
+    transparent:true, opacity: Math.max(0, Math.min(1, op)), side: THREE.DoubleSide, depthWrite:false});
+}
+const TWO_PI = Math.PI*2;
+const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
+const eio = x=>x<0.5?2*x*x:1-Math.pow(-2*x+2,2)/2;
+const eout = x=>1-Math.pow(1-x,3);
+
+function discPartial(R, H, faceC, edgeC, ringC, fop, eop, rop, sw){
+  const rw = Math.max(0.001, Math.min(TH.rw, R*0.08)), eps = rw*1.5;
+  const g = new THREE.Group();
+  if (sw <= 0.001) return g;
+  if (sw >= TWO_PI - 0.001){
+    const ft = new THREE.CircleGeometry(R, 128); ft.rotateX(-Math.PI/2); ft.translate(0, H/2, 0);
+    const fb = new THREE.CircleGeometry(R, 128); fb.rotateX(Math.PI/2); fb.translate(0, -H/2, 0);
+    g.add(new THREE.Mesh(ft, mkMat(faceC, fop)));
+    g.add(new THREE.Mesh(fb, mkMat(faceC, fop*0.7)));
+    g.add(new THREE.Mesh(new THREE.CylinderGeometry(R, R, H, 128, 1, true), mkMat(edgeC, eop)));
+    [H/2+eps, -H/2-eps].forEach(ry=>{
+      const ring = new THREE.TorusGeometry(R, rw, 8, 128);
+      ring.rotateX(Math.PI/2); ring.translate(0, ry, 0);
+      g.add(new THREE.Mesh(ring, mkMat(ringC, rop)));
+    });
+    return g;
+  }
+  const seg = Math.max(8, Math.round(128*sw/TWO_PI));
+  const a0 = 0, a1 = sw;
+  function faceWedge(y, ccw){
+    const v = [0,y,0], idx = [];
+    for (let i = 0; i <= seg; i++){const a = a0+(a1-a0)*i/seg; v.push(Math.cos(a)*R, y, Math.sin(a)*R);}
+    for (let i = 0; i < seg; i++) ccw ? idx.push(0,i+1,i+2) : idx.push(0,i+2,i+1);
+    const bg = new THREE.BufferGeometry();
+    bg.setAttribute('position', new THREE.Float32BufferAttribute(v, 3));
+    bg.setIndex(idx); bg.computeVertexNormals(); return bg;
+  }
+  g.add(new THREE.Mesh(faceWedge(H/2, true), mkMat(faceC, fop)));
+  g.add(new THREE.Mesh(faceWedge(-H/2, false), mkMat(faceC, fop*0.7)));
+  const wallV = [], wallI = [];
+  for (let i = 0; i <= seg; i++){
+    const a = a0+(a1-a0)*i/seg, cx = Math.cos(a)*R, cz = Math.sin(a)*R;
+    wallV.push(cx, H/2, cz, cx, -H/2, cz);
+  }
+  for (let i = 0; i < seg; i++){const b = i*2; wallI.push(b, b+1, b+2, b+1, b+3, b+2);}
+  const wallG = new THREE.BufferGeometry();
+  wallG.setAttribute('position', new THREE.Float32BufferAttribute(wallV, 3));
+  wallG.setIndex(wallI); wallG.computeVertexNormals();
+  g.add(new THREE.Mesh(wallG, mkMat(edgeC, eop)));
+  const radialFade = 1 - clamp((sw - TWO_PI*0.85) / (TWO_PI*0.15), 0, 1);
+  function radial(angle){
+    const cx = Math.cos(angle)*R, cz = Math.sin(angle)*R;
+    const v = [0, H/2, 0, cx, H/2, cz, 0, -H/2, 0, cx, -H/2, cz];
+    const idx = [0,1,2, 1,3,2, 0,2,1, 1,2,3];
+    const bg = new THREE.BufferGeometry();
+    bg.setAttribute('position', new THREE.Float32BufferAttribute(v, 3));
+    bg.setIndex(idx); bg.computeVertexNormals(); return bg;
+  }
+  if (radialFade > 0.001){
+    g.add(new THREE.Mesh(radial(a0), mkMat(edgeC, eop*radialFade)));
+    g.add(new THREE.Mesh(radial(a1), mkMat(edgeC, eop*radialFade)));
+  }
+  function arcT(y){
+    const pts = [];
+    for (let i = 0; i <= seg; i++){const a = a0+(a1-a0)*i/seg; pts.push(new THREE.Vector3(Math.cos(a)*R, y, Math.sin(a)*R));}
+    return new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), seg, rw, 8, false);
+  }
+  g.add(new THREE.Mesh(arcT(H/2+eps), mkMat(ringC, rop)));
+  g.add(new THREE.Mesh(arcT(-H/2-eps), mkMat(ringC, rop)));
+  function lineT(x0, y, z0, x1, z1){
+    const pts = [new THREE.Vector3(x0, y, z0), new THREE.Vector3(x1, y, z1)];
+    return new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 4, rw, 8, false);
+  }
+  if (radialFade > 0.001){
+    [H/2+eps, -H/2-eps].forEach(y=>{
+      const c0x = Math.cos(a0)*R, c0z = Math.sin(a0)*R;
+      const c1x = Math.cos(a1)*R, c1z = Math.sin(a1)*R;
+      g.add(new THREE.Mesh(lineT(0, y, 0, c0x, c0z), mkMat(ringC, rop*radialFade)));
+      g.add(new THREE.Mesh(lineT(0, y, 0, c1x, c1z), mkMat(ringC, rop*radialFade)));
+    });
+  }
+  return g;
+}
+
+function build(sweeps){
+  while (group.children.length) group.remove(group.children[0]);
+  const G = CONFIG.geometry, n = CONFIG.models.length;
+  const radiumR = G.starR + G.modelR + G.radiumPad;
+  const modelY = (G.modelH + G.gapY + G.radiumH)/2 - G.modelH/2;
+  const radiumY = -((G.modelH + G.gapY + G.radiumH)/2 - G.radiumH/2);
+  CONFIG.models.forEach((m, i)=>{
+    const sw = sweeps ? sweeps[i] : TWO_PI;
+    if (sw <= 0.001) return;
+    const a = (i/n)*TWO_PI + G.rotation*Math.PI/180;
+    const x = Math.cos(a)*G.starR, z = Math.sin(a)*G.starR;
+    const d = discPartial(G.modelR, G.modelH, PAL.g900, PAL.g900, PAL.g900, TH.fop, TH.eop, TH.rop, sw);
+    d.position.set(x, modelY, z);
+    d.userData = {kind:'model', idx:i, sweep:sw};
+    group.add(d);
+  });
+  const rSw = sweeps ? sweeps[n] : TWO_PI;
+  if (rSw > 0.001){
+    const rd = discPartial(radiumR, G.radiumH, PAL.blueFace, PAL.blueEdge, PAL.g900, TH.fop, TH.eop, TH.rop, rSw);
+    rd.position.set(0, radiumY, 0);
+    rd.userData = {kind:'radium', sweep:rSw, R:radiumR};
+    group.add(rd);
+  }
+}
+function project(v3){
+  const c = v3.clone().project(camera);
+  const w = renderer.domElement.clientWidth, h = renderer.domElement.clientHeight;
+  return {x: (c.x*0.5+0.5)*w, y: (-c.y*0.5+0.5)*h, behind: c.z >= 1};
+}
+function drawLabels(sweeps){
+  svg.innerHTML = '';
+  if (!CONFIG.labels.show) return;
+  const G = CONFIG.geometry, L = CONFIG.labels;
+  group.children.forEach(dg=>{
+    const ud = dg.userData; if (!ud) return;
+    const sw = (sweeps && ud.kind === 'model') ? sweeps[ud.idx]
+             : (sweeps && ud.kind === 'radium') ? sweeps[CONFIG.models.length]
+             : (ud.sweep || TWO_PI);
+    const fade = clamp((sw/TWO_PI - 0.4)/0.6, 0, 1);
+    if (fade < 0.02) return;
+    if (ud.kind === 'model'){
+      const m = CONFIG.models[ud.idx]; if (!m) return;
+      const wp = new THREE.Vector3(0, G.modelH/2+0.01, 0).applyMatrix4(dg.matrixWorld);
+      const p = project(wp); if (p.behind) return;
+      const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      t.setAttribute('x', p.x); t.setAttribute('y', p.y + L.modelSize*0.36);
+      t.setAttribute('text-anchor', 'middle'); t.setAttribute('fill', PAL.g900);
+      t.setAttribute('font-family', 'JetBrains Mono, monospace');
+      t.setAttribute('font-size', L.modelSize); t.setAttribute('font-weight', '500');
+      t.setAttribute('letter-spacing', '0.04em');
+      t.setAttribute('opacity', fade.toFixed(3));
+      t.textContent = m.name; svg.appendChild(t);
+    } else if (ud.kind === 'radium'){
+      const R = ud.R;
+      const inset = Math.min(R*0.18, L.radiumSize*0.04+0.15);
+      const wp = new THREE.Vector3(0, G.radiumH/2+0.001, R-inset).applyMatrix4(dg.matrixWorld);
+      const p = project(wp); if (p.behind) return;
+      const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      t.setAttribute('x', p.x); t.setAttribute('y', p.y + (L.radiumOffset-60));
+      t.setAttribute('text-anchor', 'middle'); t.setAttribute('fill', PAL.g900);
+      t.setAttribute('font-family', 'JetBrains Mono, monospace');
+      t.setAttribute('font-size', L.radiumSize); t.setAttribute('font-weight', '500');
+      t.setAttribute('letter-spacing', '0.16em');
+      t.setAttribute('opacity', fade.toFixed(3));
+      t.textContent = L.radiumLabel; svg.appendChild(t);
+    }
+  });
+}
+
+let curTilt = CONFIG.camera.tilt;
+// Mouse-responsive tilt for site embed
+let _mx=0,_my=0,_sx=0,_sy=0;
+const _TR=4; // tilt range degrees
+document.addEventListener('mousemove',e=>{
+  _mx=((e.clientX/window.innerWidth)-0.5)*2;
+  _my=((e.clientY/window.innerHeight)-0.5)*2;
+});
+function updateCam(){
+  const sm=0.08;
+  _sx+=(_mx-_sx)*sm; _sy+=(_my-_sy)*sm;
+  const tr = curTilt*Math.PI/180 + _sy*_TR*Math.PI/180;
+  const orb = _sx*_TR*Math.PI/180;
+  camera.position.set(Math.sin(orb)*Math.cos(tr)*CONFIG.camera.distance, Math.sin(tr)*CONFIG.camera.distance, Math.cos(orb)*Math.cos(tr)*CONFIG.camera.distance);
+  camera.lookAt(0,0,0); camera.updateProjectionMatrix();
+}
+
+const anim = {active:false, t:0};
+function animTotal(){return (CONFIG.models.length-1)*CONFIG.animation.modelGap + CONFIG.animation.modelDur;}
+function tick(dt){
+  if (!anim.active) return;
+  const total = animTotal();
+  anim.t = Math.min(total, anim.t + dt);
+  const sweeps = CONFIG.models.map((_, i)=>{
+    const localT = clamp((anim.t - i*CONFIG.animation.modelGap)/CONFIG.animation.modelDur, 0, 1);
+    return eio(localT)*TWO_PI;
+  });
+  const radiumStart = Math.max(0, total - CONFIG.animation.radiumDur);
+  const radiumLocal = clamp((anim.t - radiumStart)/CONFIG.animation.radiumDur, 0, 1);
+  sweeps.push(eio(radiumLocal)*TWO_PI);
+  const tiltT = eout(clamp(anim.t/total, 0, 1));
+  curTilt = CONFIG.camera.tiltStart + (CONFIG.camera.tilt - CONFIG.camera.tiltStart)*tiltT;
+  build(sweeps); scene.updateMatrixWorld(true); drawLabels(sweeps);
+  if (anim.t >= total) anim.active = false;
+}
+window.foundationPlay = function(){
+  anim.t = 0; anim.active = true; curTilt = CONFIG.camera.tiltStart;
+  build(new Array(CONFIG.models.length+1).fill(0));
+};
+const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+if (reduced){build(); scene.updateMatrixWorld(true); drawLabels();}
+else {
+  build(new Array(CONFIG.models.length+1).fill(0));
+  let hasPlayed = false;
+  const io = new IntersectionObserver(entries=>{
+    entries.forEach(entry=>{if (entry.isIntersecting && !hasPlayed){hasPlayed = true; window.foundationPlay();}});
+  }, {threshold: 0.3});
+  io.observe(document.getElementById('foundation-container'));
+}
+let lastT = performance.now();
+function loop(){
+  requestAnimationFrame(loop);
+  const now = performance.now(), dt = Math.min(0.1, (now-lastT)/1000); lastT = now;
+  tick(dt); updateCam(); renderer.render(scene, camera);
+  if (!anim.active) drawLabels();
+}
+loop();
+</script>
+</body>
+</html>
