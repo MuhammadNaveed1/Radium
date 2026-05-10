@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Token Flow</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+html, body { width:100%; height:100%; overflow:hidden; font-family:'JetBrains Mono', monospace; }
+#fl-container { position:relative; width:100%; height:100%; }
+#fl-canvas { display:block; width:100%; height:100%; }
+#fl-labels { position:absolute; inset:0; pointer-events:none; }
+</style>
+</head>
+<body>
+<div id="fl-container">
+  <canvas id="fl-canvas"></canvas>
+  <svg id="fl-labels" xmlns="http://www.w3.org/2000/svg"></svg>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+const CONFIG = {
+  "mode": "flow",
+  "camera": {
+    "fov": 30,
+    "distance": 10,
+    "tilt": 18,
+    "tiltStart": 50,
+    "tiltEnd": 18,
+    "orbit": 0
+  },
+  "geometry": {
+    "radius": 1.85,
+    "thickness": 0.12,
+    "gap": 1.1,
+    "arrow": 0.03
+  },
+  "animation": {
+    "speed": 0.7
+  },
+  "labels": {
+    "show": true,
+    "size": 20,
+    "offsetX": 20,
+    "offsetY": 0,
+    "items": [
+      "GPU HOUR",
+      "RADIUM OPTIMIZED\nEXECUTION",
+      "MORE TOKENS\nPRODUCED",
+      "LOWER COST\nPER TOKEN"
+    ]
+  },
+};
+const PAL={g900:'#242220'};
+const TH={fop:0.12,eop:0.28,rop:1,rw:0.002};
+document.body.style.background=CONFIG.background;
+const canvas=document.getElementById('fl-canvas');
+const svg=document.getElementById('fl-labels');
+const renderer=new THREE.WebGLRenderer({canvas,antialias:true,alpha:true});
+renderer.setPixelRatio(devicePixelRatio);
+const scene=new THREE.Scene();
+scene.background=new THREE.Color(CONFIG.background);
+scene.add(new THREE.AmbientLight(0xffffff,0.85));
+const kl=new THREE.DirectionalLight(0xffffff,0.5);kl.position.set(3,5,4);scene.add(kl);
+const camera=new THREE.PerspectiveCamera(CONFIG.camera.fov,1,0.01,1000);
+const group=new THREE.Group();scene.add(group);
+function resize(){const c=document.getElementById('fl-container');const w=c.clientWidth,h=c.clientHeight;renderer.setSize(w,h);camera.aspect=w/h;camera.updateProjectionMatrix();svg.setAttribute('width',w);svg.setAttribute('height',h);svg.setAttribute('viewBox','0 0 '+w+' '+h);}
+window.addEventListener('resize',resize);resize();
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const eio=x=>x<0.5?2*x*x:1-Math.pow(-2*x+2,2)/2;
+const eoutSoft=x=>1-Math.pow(1-x,2.2);
+function mkMat(col,op){return new THREE.MeshStandardMaterial({color:new THREE.Color(col),roughness:0.6,metalness:0.05,transparent:true,opacity:clamp(op,0,1),side:THREE.DoubleSide,depthWrite:false});}
+const G=CONFIG.geometry,L=CONFIG.labels,steps=L.items;
+function disc(R,H){
+  const rw=Math.max(0.001,Math.min(TH.rw,R*0.08)),eps=rw*1.5;
+  const g=new THREE.Group();
+  const ft=new THREE.CircleGeometry(R,64);ft.rotateX(-Math.PI/2);ft.translate(0,H/2,0);
+  const fb=new THREE.CircleGeometry(R,64);fb.rotateX(Math.PI/2);fb.translate(0,-H/2,0);
+  g.add(new THREE.Mesh(ft,mkMat(PAL.g900,TH.fop)));g.add(new THREE.Mesh(fb,mkMat(PAL.g900,TH.fop*0.7)));
+  g.add(new THREE.Mesh(new THREE.CylinderGeometry(R,R,H,64,1,true),mkMat(PAL.g900,TH.eop)));
+  [H/2+eps,-H/2-eps].forEach(ry=>{const ring=new THREE.TorusGeometry(R,rw,8,64);ring.rotateX(Math.PI/2);ring.translate(0,ry,0);g.add(new THREE.Mesh(ring,mkMat(PAL.g900,TH.rop)));});
+  return g;
+}
+const n=steps.length;
+function buildAt(progs){
+  while(group.children.length)group.remove(group.children[0]);
+  const stepH=G.thickness+G.gap,totalH=(n-1)*stepH+G.thickness,topY=totalH/2;
+  steps.forEach((label,i)=>{
+    const p=Math.max(0.001,progs?progs[i]:1);const R=G.radius*p;
+    const d=disc(R,G.thickness);d.position.y=topY-i*stepH;
+    if(i<n-1&&p>0.01){
+      const aSz=G.arrow,rw=Math.max(0.001,Math.min(TH.rw,G.radius*0.08)),eps=rw*1.5;
+      const H=G.thickness,shaftStart=-(H/2+eps),coneBase=-(H/2+G.gap*0.78);
+      const shaftLen=Math.max(0.001,Math.abs(coneBase)-(H/2+eps+0.02));
+      const shaft=new THREE.CylinderGeometry(aSz*0.3,aSz*0.3,shaftLen*p,8);shaft.translate(0,shaftStart-shaftLen*p/2,0);
+      d.add(new THREE.Mesh(shaft,mkMat(PAL.g900,TH.rop*0.7)));
+      if(p>=0.85){const ap=Math.min(1,(p-0.85)/0.15),coneH=aSz*2;
+        const head=new THREE.ConeGeometry(aSz*ap,coneH*ap,12);head.rotateZ(Math.PI);head.translate(0,coneBase+coneH*ap/2,0);
+        d.add(new THREE.Mesh(head,mkMat(PAL.g900,TH.rop)));
+      }
+    }
+    group.add(d);
+  });
+}
+let curTilt=CONFIG.camera.tilt;
+const anim={active:false,t:0};
+let _mx=0,_my=0,_sx=0,_sy=0;const _TR=4;
+document.addEventListener('mousemove',e=>{_mx=((e.clientX/window.innerWidth)-0.5)*2;_my=((e.clientY/window.innerHeight)-0.5)*2;});
+function updateCam(){
+  const sm=0.08;_sx+=(_mx-_sx)*sm;_sy+=(_my-_sy)*sm;
+  const tr=curTilt*Math.PI/180+_sy*_TR*Math.PI/180;
+  const or=CONFIG.camera.orbit*Math.PI/180+_sx*_TR*Math.PI/180;
+  camera.position.set(Math.sin(or)*Math.cos(tr)*CONFIG.camera.distance,Math.sin(tr)*CONFIG.camera.distance,Math.cos(or)*Math.cos(tr)*CONFIG.camera.distance);
+  camera.lookAt(0,0,0);camera.updateProjectionMatrix();
+}
+function animTotal(){return(n*0.55+0.5)/CONFIG.animation.speed;}
+function tick(dt){
+  if(!anim.active)return;
+  const total=animTotal();anim.t=Math.min(total,anim.t+dt);
+  const rawT=anim.t*CONFIG.animation.speed;
+  const progs=steps.map((_,i)=>Math.max(0.001,eio(clamp(rawT-i*0.55,0,1))));
+  curTilt=CONFIG.camera.tiltStart+(CONFIG.camera.tiltEnd-CONFIG.camera.tiltStart)*eoutSoft(clamp(anim.t/total,0,1));
+  buildAt(progs);scene.updateMatrixWorld(true);drawLabels();
+  if(anim.t>=total)anim.active=false;
+}
+function project(v3){const c=v3.clone().project(camera);const w=renderer.domElement.clientWidth,h=renderer.domElement.clientHeight;return{x:(c.x*0.5+0.5)*w,y:(-c.y*0.5+0.5)*h,behind:c.z>=1};}
+function drawLabels(){
+  svg.innerHTML='';if(!L.show)return;
+  const rawT=anim.active?anim.t*CONFIG.animation.speed:999;
+  group.children.forEach((grp,i)=>{
+    if(i>=steps.length)return;
+    const discT=clamp((rawT-i*0.55)/0.4,0,1);if(discT<=0)return;
+    const pt=new THREE.Vector3(G.radius+0.15,0,0).applyMatrix4(grp.matrixWorld);
+    const p=project(pt);if(p.behind)return;
+    const lines=steps[i].split('\n'),lh=L.size*1.3;
+    lines.forEach((ln,li)=>{
+      const t=document.createElementNS('http://www.w3.org/2000/svg','text');
+      t.setAttribute('x',p.x+L.offsetX);t.setAttribute('y',p.y+L.offsetY-(lines.length-1-li)*lh);
+      t.setAttribute('fill',PAL.g900);t.setAttribute('opacity',discT.toFixed(3));
+      t.setAttribute('font-family','JetBrains Mono, monospace');t.setAttribute('font-size',L.size);
+      t.setAttribute('letter-spacing','0.06em');t.setAttribute('text-anchor','start');
+      t.textContent=ln;svg.appendChild(t);
+    });
+  });
+}
+window.flowPlay=function(){anim.t=0;anim.active=true;curTilt=CONFIG.camera.tiltStart;buildAt(steps.map(()=>0.001));};
+const reduced=window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+if(reduced){buildAt(null);scene.updateMatrixWorld(true);drawLabels();}
+else{buildAt(steps.map(()=>0.001));let hp=false;const io=new IntersectionObserver(es=>{es.forEach(e=>{if(e.isIntersecting&&!hp){hp=true;window.flowPlay();}});},{threshold:0.3});io.observe(document.getElementById('fl-container'));}
+let lastT=performance.now();
+function loop(){requestAnimationFrame(loop);const now=performance.now(),dt=Math.min(0.1,(now-lastT)/1000);lastT=now;tick(dt);updateCam();renderer.render(scene,camera);if(!anim.active)drawLabels();}
+loop();
+</script>
+</body>
+</html>
