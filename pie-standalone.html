@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Tokenomics</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+html, body { width:100%; height:100%; overflow:hidden; font-family:'JetBrains Mono', monospace; }
+#pie-container { position:relative; width:100%; height:100%; }
+#pie-canvas { display:block; width:100%; height:100%; }
+#pie-labels { position:absolute; inset:0; pointer-events:none; }
+</style>
+</head>
+<body>
+<div id="pie-container">
+  <canvas id="pie-canvas"></canvas>
+  <svg id="pie-labels" xmlns="http://www.w3.org/2000/svg"></svg>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+const CONFIG = {
+  "mode": "pie",
+  "camera": {
+    "fov": 20,
+    "distance": 18,
+    "tilt": 20,
+    "tiltStart": 5,
+    "tiltEnd": 20
+  },
+  "dual": true,
+  "gap": 5,
+  "rot1": 55,
+  "rot2": 90,
+  "delay2": 0.4,
+  "animation": {
+    "speed": 0.5
+  },
+  "background": "#FFFFFF",
+  "charts": [
+    {
+      "slices": [
+        {
+          "pct": 15
+        },
+        {
+          "pct": 25
+        },
+        {
+          "pct": 60
+        }
+      ],
+      "labels": [
+        "MODEL LICENSING",
+        "OVERHEAD",
+        "AWS"
+      ],
+      "lsz": [
+        14,
+        14,
+        30
+      ],
+      "ll": 200,
+      "dot": 5,
+      "R": 2,
+      "T": 0.15
+    },
+    {
+      "slices": [
+        {
+          "pct": 50
+        },
+        {
+          "pct": 25
+        },
+        {
+          "pct": 25
+        }
+      ],
+      "labels": [
+        "SAVINGS\n(0% MODEL LICENSING)",
+        "RADIUM'S OWN CLOUD",
+        "OVERHEAD"
+      ],
+      "lsz": [
+        20,
+        14,
+        14
+      ],
+      "ll": 200,
+      "dot": 5,
+      "R": 2,
+      "T": 0.15
+    }
+  ]
+};
+const PAL = {g900:'#242220', blueFace:'#0000CC', blueEdge:'#5A64FF'};
+const TH = {fop:0.12, eop:0.28, rop:1, rw:0.002};
+document.body.style.background = CONFIG.background;
+const canvas = document.getElementById('pie-canvas');
+const svg = document.getElementById('pie-labels');
+const renderer = new THREE.WebGLRenderer({canvas, antialias:true, alpha:true});
+renderer.setPixelRatio(devicePixelRatio);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(CONFIG.background);
+scene.add(new THREE.AmbientLight(0xffffff, 0.85));
+const kl = new THREE.DirectionalLight(0xffffff, 0.5); kl.position.set(3,5,4); scene.add(kl);
+const camera = new THREE.PerspectiveCamera(CONFIG.camera.fov, 1, 0.01, 1000);
+const group1 = new THREE.Group(); scene.add(group1);
+const group2 = new THREE.Group(); scene.add(group2);
+function resize(){
+  const c=document.getElementById('pie-container');
+  const w=c.clientWidth, h=c.clientHeight;
+  renderer.setSize(w,h); camera.aspect=w/h; camera.updateProjectionMatrix();
+  svg.setAttribute('width',w); svg.setAttribute('height',h); svg.setAttribute('viewBox','0 0 '+w+' '+h);
+}
+window.addEventListener('resize', resize); resize();
+const TWO_PI=Math.PI*2;
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const eio=x=>x<0.5?2*x*x:1-Math.pow(-2*x+2,2)/2;
+const eoutSoft=x=>1-Math.pow(1-x,2.2);
+function mkMat(col,op){return new THREE.MeshStandardMaterial({color:new THREE.Color(col),roughness:0.6,metalness:0.05,transparent:true,opacity:clamp(op,0,1),side:THREE.DoubleSide,depthWrite:false});}
+function sliceFaceOp(i,n){if(n<=1)return TH.fop;const k=i/(n-1);return clamp(TH.fop*(0.6+0.8*k),0,1);}
+function faceGeo(R,a0,a1,steps,y,ccw){
+  const v=[0,y,0],idx=[];
+  for(let i=0;i<=steps;i++){const a=a0+(a1-a0)*i/steps;v.push(Math.cos(a)*R,y,Math.sin(a)*R);}
+  for(let i=0;i<steps;i++) ccw?idx.push(0,i+1,i+2):idx.push(0,i+2,i+1);
+  const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(v,3));g.setIndex(idx);g.computeVertexNormals();return g;
+}
+function outerWall(R,a0,a1,steps,H){
+  const v=[],idx=[];
+  for(let i=0;i<=steps;i++){const a=a0+(a1-a0)*i/steps,cx=Math.cos(a),cz=Math.sin(a);v.push(cx*R,H/2,cz*R,cx*R,-H/2,cz*R);}
+  for(let i=0;i<steps;i++){const b=i*2;idx.push(b,b+1,b+2,b+1,b+3,b+2);}
+  const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(v,3));g.setIndex(idx);g.computeVertexNormals();return g;
+}
+function radialWall(R,angle,H){
+  const cx=Math.cos(angle),cz=Math.sin(angle);
+  const v=[0,H/2,0,cx*R,H/2,cz*R,0,-H/2,0,cx*R,-H/2,cz*R],idx=[0,1,2,1,3,2,0,2,1,1,2,3];
+  const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(v,3));g.setIndex(idx);g.computeVertexNormals();return g;
+}
+function arcTube(R,a0,a1,steps,y,rw){
+  const pts=[];for(let i=0;i<=steps;i++){const a=a0+(a1-a0)*i/steps;pts.push(new THREE.Vector3(Math.cos(a)*R,y,Math.sin(a)*R));}
+  return new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts),steps,rw,8,false);
+}
+function lineTube(x0,y0,z0,x1,y1,z1,rw,frac){
+  const f=Math.max(0.001,frac==null?1:frac);
+  return new THREE.TubeGeometry(new THREE.CatmullRomCurve3([new THREE.Vector3(x0,y0,z0),new THREE.Vector3(x0+(x1-x0)*f,y0+(y1-y0)*f,z0+(z1-z0)*f)]),4,rw,8,false);
+}
+function buildPie(grp,ch,prog){
+  while(grp.children.length)grp.remove(grp.children[0]);
+  if(prog<=0)return;
+  const total=ch.slices.reduce((s,sl)=>s+sl.pct,0);if(!total)return;
+  const rw=Math.max(0.001,Math.min(TH.rw,ch.R*0.08)),eps=rw*1.5;
+  const totalAngle=TWO_PI*prog;let a0=0,drawn=0;
+  ch.ranges=[];let cum=0;ch.slices.forEach(sl=>{const s=cum;cum+=sl.pct/total;ch.ranges.push([s,cum]);});
+  ch.slices.forEach((sl,si)=>{
+    if(drawn>=totalAngle-0.0001)return;
+    const fop=sliceFaceOp(si,ch.slices.length);
+    const full=(sl.pct/total)*TWO_PI,avail=totalAngle-drawn;
+    const sweep=Math.min(full,avail),a1=a0+sweep;
+    const fp=sweep/full,steps=Math.max(4,Math.round(256*sweep/TWO_PI));
+    const R=ch.R,H=ch.T;
+    grp.add(new THREE.Mesh(faceGeo(R,a0,a1,steps,H/2,true),mkMat(PAL.g900,fop)));
+    grp.add(new THREE.Mesh(faceGeo(R,a0,a1,steps,-H/2,false),mkMat(PAL.g900,fop)));
+    grp.add(new THREE.Mesh(outerWall(R,a0,a1,steps,H),mkMat(PAL.g900,TH.eop)));
+    grp.add(new THREE.Mesh(radialWall(R,a0,H),mkMat(PAL.g900,TH.eop)));
+    grp.add(new THREE.Mesh(radialWall(R,a1,H),mkMat(PAL.g900,TH.eop)));
+    const rm=mkMat(PAL.g900,TH.rop);
+    grp.add(new THREE.Mesh(arcTube(R,a0,a1,steps,H/2+eps,rw),rm));
+    grp.add(new THREE.Mesh(arcTube(R,a0,a1,steps,-H/2-eps,rw),rm.clone()));
+    const c0=Math.cos(a0)*R,s0=Math.sin(a0)*R,c1=Math.cos(a1)*R,s1=Math.sin(a1)*R;
+    grp.add(new THREE.Mesh(lineTube(0,H/2+eps,0,c0,H/2+eps,s0,rw),rm.clone()));
+    grp.add(new THREE.Mesh(lineTube(0,-H/2-eps,0,c0,-H/2-eps,s0,rw),rm.clone()));
+    grp.add(new THREE.Mesh(lineTube(0,H/2+eps,0,c1,H/2+eps,s1,rw,fp),rm.clone()));
+    grp.add(new THREE.Mesh(lineTube(0,-H/2-eps,0,c1,-H/2-eps,s1,rw,fp),rm.clone()));
+    drawn+=sweep;a0=a1;
+  });
+}
+function buildFull(grp,ch){buildPie(grp,ch,1);}
+const ch1=CONFIG.charts[0], ch2=CONFIG.charts.length>1?CONFIG.charts[1]:null;
+ch1.ranges=[];if(ch2)ch2.ranges=[];
+const dual=CONFIG.dual&&ch2;
+let pieTilt=CONFIG.camera.tilt;
+const anim={active:false,t:0,done1:false,done2:false,elapsed:0,drawTilt:null};
+let _mx=0,_my=0,_sx=0,_sy=0;const _TR=4;
+document.addEventListener('mousemove',e=>{_mx=((e.clientX/window.innerWidth)-0.5)*2;_my=((e.clientY/window.innerHeight)-0.5)*2;});
+function updateCam(){
+  let td;if(anim.active)td=anim.drawTilt||pieTilt;else td=pieTilt;
+  const sm=0.08;_sx+=(_mx-_sx)*sm;_sy+=(_my-_sy)*sm;
+  const tr=td*Math.PI/180+_sy*_TR*Math.PI/180;
+  const orb=_sx*_TR*Math.PI/180;
+  camera.position.set(Math.sin(orb)*Math.cos(tr)*CONFIG.camera.distance,Math.sin(tr)*CONFIG.camera.distance,Math.cos(orb)*Math.cos(tr)*CONFIG.camera.distance);
+  camera.lookAt(0,0,0);camera.updateProjectionMatrix();
+  group1.rotation.y=CONFIG.rot1*Math.PI/180;
+  if(dual)group2.rotation.y=CONFIG.rot2*Math.PI/180;
+}
+function tick(dt){
+  if(!anim.active)return;
+  const del=CONFIG.delay2*(CONFIG.animation.speed)*0.5;
+  const total=1.15+del;
+  anim.t=Math.min(total,anim.t+dt*CONFIG.animation.speed*0.5);
+  anim.elapsed=(anim.elapsed||0)+dt;
+  const totalDur=total/(CONFIG.animation.speed*0.5);
+  anim.drawTilt=CONFIG.camera.tiltStart+(CONFIG.camera.tiltEnd-CONFIG.camera.tiltStart)*eoutSoft(clamp(anim.elapsed/totalDur,0,1));
+  const g1=Math.min(1,anim.t);
+  buildPie(group1,ch1,eio(g1));
+  if(g1>=1&&!anim.done1){anim.done1=true;buildFull(group1,ch1);}
+  if(dual){
+    const t2=Math.max(0,anim.t-del),g2=Math.min(1,t2);
+    if(g2>0){buildPie(group2,ch2,eio(g2));if(g2>=1&&!anim.done2){anim.done2=true;buildFull(group2,ch2);}}
+    else{while(group2.children.length)group2.remove(group2.children[0]);}
+  }
+  if(anim.t>=total){anim.active=false;pieTilt=CONFIG.camera.tiltEnd;}
+}
+function project(v3){const c=v3.clone().project(camera);const w=renderer.domElement.clientWidth,h=renderer.domElement.clientHeight;return{x:(c.x*0.5+0.5)*w,y:(-c.y*0.5+0.5)*h,behind:c.z>=1};}
+function drawLabels(){
+  svg.innerHTML='';
+  const W=renderer.domElement.clientWidth,H=renderer.domElement.clientHeight;
+  const lw=Math.max(0.5,TH.rw*800);
+  function drawFor(grp,ch,animT){
+    const total=ch.slices.reduce((s,sl)=>s+sl.pct,0);if(!total||!ch.ranges||!ch.ranges.length)return;
+    let a0=0;
+    ch.slices.forEach((sl,i)=>{
+      const sweep=(sl.pct/total)*TWO_PI,a1=a0+sweep,amid=(a0+a1)/2;
+      const lp=anim.active&&ch.ranges&&ch.ranges[i]?Math.max(0,Math.min(1,(animT-(ch.ranges[i][0]+ch.ranges[i][1])*0.5)/0.18)):1;
+      if(lp<=0){a0=a1;return;}
+      const wp=new THREE.Vector3(Math.cos(amid)*ch.R*0.65,ch.T/2,Math.sin(amid)*ch.R*0.65).applyMatrix4(grp.matrixWorld);
+      wp.project(camera);
+      const sx=(wp.x*0.5+0.5)*W,sy=(-wp.y*0.5+0.5)*H;
+      if(wp.z>=1){a0=a1;return;}
+      const ly=sy-ch.ll*lp;
+      const dot=document.createElementNS('http://www.w3.org/2000/svg','circle');
+      dot.setAttribute('cx',sx);dot.setAttribute('cy',sy);dot.setAttribute('r',ch.dot);dot.setAttribute('fill',PAL.g900);svg.appendChild(dot);
+      const line=document.createElementNS('http://www.w3.org/2000/svg','line');
+      line.setAttribute('x1',sx);line.setAttribute('y1',sy-ch.dot);line.setAttribute('x2',sx);line.setAttribute('y2',ly);
+      line.setAttribute('stroke',PAL.g900);line.setAttribute('stroke-opacity','0.4');line.setAttribute('stroke-width',lw);svg.appendChild(line);
+      if(lp>0.5){
+        const sz=ch.lsz[i]||12,lh=sz*1.25,label=ch.labels[i]||'',lines=label.split('\n');
+        const txt=document.createElementNS('http://www.w3.org/2000/svg','text');
+        txt.setAttribute('text-anchor','middle');txt.setAttribute('fill',PAL.g900);
+        txt.setAttribute('font-family','JetBrains Mono, monospace');txt.setAttribute('font-size',sz);txt.setAttribute('letter-spacing','0.06em');
+        txt.setAttribute('x',sx);txt.setAttribute('y',ly-5);
+        if(lines.length===1)txt.textContent=label;
+        else lines.forEach((ln,li)=>{const ts=document.createElementNS('http://www.w3.org/2000/svg','tspan');ts.setAttribute('x',sx);ts.setAttribute('y',ly-5-(lines.length-1-li)*lh);ts.textContent=ln;txt.appendChild(ts);});
+        svg.appendChild(txt);
+      }
+      a0=a1;
+    });
+  }
+  drawFor(group1,ch1,anim.t);
+  if(dual){const d=CONFIG.delay2*CONFIG.animation.speed*0.5;drawFor(group2,ch2,Math.max(0,anim.t-d));}
+}
+if(dual){group1.position.set(-CONFIG.gap/2,0,0);group2.position.set(CONFIG.gap/2,0,0);}
+window.piePlot = function(){
+  anim.active=true;anim.t=0;anim.done1=false;anim.done2=false;anim.elapsed=0;anim.drawTilt=null;
+  if(dual){group1.position.set(-CONFIG.gap/2,0,0);group2.position.set(CONFIG.gap/2,0,0);}
+  while(group2.children.length)group2.remove(group2.children[0]);
+};
+const reduced=window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+if(reduced){buildFull(group1,ch1);if(dual)buildFull(group2,ch2);scene.updateMatrixWorld(true);drawLabels();}
+else{
+  buildPie(group1,ch1,0);
+  let hasPlayed=false;
+  const io=new IntersectionObserver(entries=>{entries.forEach(e=>{if(e.isIntersecting&&!hasPlayed){hasPlayed=true;window.piePlot();}});},{threshold:0.3});
+  io.observe(document.getElementById('pie-container'));
+}
+let lastT=performance.now();
+function loop(){
+  requestAnimationFrame(loop);
+  const now=performance.now(),dt=Math.min(0.1,(now-lastT)/1000);lastT=now;
+  tick(dt);updateCam();renderer.render(scene,camera);drawLabels();
+}
+loop();
+</script>
+</body>
+</html>
