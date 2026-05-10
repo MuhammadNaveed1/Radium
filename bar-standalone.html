@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>GPU Util</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+html, body { width:100%; height:100%; overflow:hidden; font-family:'JetBrains Mono', monospace; }
+#bar-container { position:relative; width:100%; height:100%; }
+#bar-canvas { display:block; width:100%; height:100%; }
+#bar-labels { position:absolute; inset:0; pointer-events:none; }
+</style>
+</head>
+<body>
+<div id="bar-container">
+  <canvas id="bar-canvas"></canvas>
+  <svg id="bar-labels" xmlns="http://www.w3.org/2000/svg"></svg>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+/* GPU Util (bar chart) — standalone. window.barPlay() to trigger. */
+const CONFIG = {
+  "mode": "bar",
+  "camera": {
+    "fov": 5,
+    "distance": 88,
+    "tilt": 26,
+    "tiltStart": -26,
+    "tiltEnd": 26,
+    "orbit": 0
+  },
+  "geometry": {
+    "R": 1.58,
+    "maxH": 3.8,
+    "spacing": 6
+  },
+  "animation": {
+    "speed": 0.2
+  },
+  "labels": {
+    "show": true,
+    "size": 20,
+    "offsetTop": 10,
+    "offsetBot": -20
+  },
+  "background": "#F5F2EC",
+  "bars": [
+    {
+      "label": "STANDARD\nINFERENCE STACK",
+      "pct": 50,
+      "range": "~40–60%",
+      "accent": false,
+      "solid": true
+    },
+    {
+      "label": "RADIUM\nOPTIMIZED STACK",
+      "pct": 85,
+      "range": "~80–90%",
+      "accent": true,
+      "solid": false
+    }
+  ]
+};
+const PAL = {g900:'#242220', blueFace:'#0000CC', blueEdge:'#5A64FF'};
+const TH = {fop:0.12, eop:0.28, rop:1, rw:0.002};
+document.body.style.background = CONFIG.background;
+
+const canvas = document.getElementById('bar-canvas');
+const svg = document.getElementById('bar-labels');
+const renderer = new THREE.WebGLRenderer({canvas, antialias:true, alpha:true});
+renderer.setPixelRatio(devicePixelRatio);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(CONFIG.background);
+scene.add(new THREE.AmbientLight(0xffffff, 0.85));
+const kl = new THREE.DirectionalLight(0xffffff, 0.5); kl.position.set(3,5,4); scene.add(kl);
+const camera = new THREE.PerspectiveCamera(CONFIG.camera.fov, 1, 0.01, 1000);
+const group = new THREE.Group(); scene.add(group);
+
+function resize(){
+  const c = document.getElementById('bar-container');
+  const w = c.clientWidth, h = c.clientHeight;
+  renderer.setSize(w, h); camera.aspect = w/h; camera.updateProjectionMatrix();
+  svg.setAttribute('width', w); svg.setAttribute('height', h);
+  svg.setAttribute('viewBox', '0 0 '+w+' '+h);
+}
+window.addEventListener('resize', resize); resize();
+
+function mkMat(col, op){
+  return new THREE.MeshStandardMaterial({color: new THREE.Color(col), roughness:0.6, metalness:0.05,
+    transparent:true, opacity: Math.max(0, Math.min(1, op)), side: THREE.DoubleSide, depthWrite:false});
+}
+const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
+const eio = x=>x<0.5?2*x*x:1-Math.pow(-2*x+2,2)/2;
+const eoutSoft = x=>1-Math.pow(1-x,2.2);
+
+function barColors(bar){
+  if (bar.accent) return {faceC:PAL.blueFace, edgeC:PAL.blueEdge, ringC:PAL.g900};
+  return {faceC:PAL.g900, edgeC:PAL.g900, ringC:PAL.g900};
+}
+function buildAt(progs){
+  while (group.children.length) group.remove(group.children[0]);
+  const n = CONFIG.bars.length;
+  const G = CONFIG.geometry;
+  CONFIG.bars.forEach((bar, i)=>{
+    const p = Math.max(0.01, progs ? progs[i] : bar.pct/100);
+    const bg = new THREE.Group(); bg.position.set((i - (n-1)/2)*G.spacing, 0, 0);
+    const R = G.R, fH = G.maxH*p, eH = G.maxH - fH;
+    const rw = Math.max(0.001, Math.min(TH.rw, R*0.08));
+    const cols = barColors(bar);
+    const fop = bar.solid ? TH.fop : 0;
+    if (fH > 0.001){
+      const cyl = new THREE.CylinderGeometry(R, R, fH, 64, 1, true); cyl.translate(0, fH/2, 0);
+      bg.add(new THREE.Mesh(cyl, mkMat(cols.edgeC, TH.eop)));
+      const bot = new THREE.CircleGeometry(R, 64); bot.rotateX(Math.PI/2);
+      bg.add(new THREE.Mesh(bot, mkMat(cols.faceC, fop)));
+      const top = new THREE.CircleGeometry(R, 64); top.rotateX(-Math.PI/2); top.translate(0, fH, 0);
+      bg.add(new THREE.Mesh(top, mkMat(cols.faceC, fop)));
+      const rb = new THREE.TorusGeometry(R, rw, 8, 64); rb.rotateX(Math.PI/2);
+      bg.add(new THREE.Mesh(rb, mkMat(cols.ringC, TH.rop)));
+      const rt = new THREE.TorusGeometry(R, rw, 8, 64); rt.rotateX(Math.PI/2); rt.translate(0, fH, 0);
+      bg.add(new THREE.Mesh(rt, mkMat(cols.ringC, TH.rop)));
+    }
+    if (eH > 0.001){
+      const ec = new THREE.CylinderGeometry(R, R, eH, 64, 1, true); ec.translate(0, fH + eH/2, 0);
+      bg.add(new THREE.Mesh(ec, mkMat(cols.edgeC, TH.eop*0.3)));
+      const et = new THREE.CircleGeometry(R, 64); et.rotateX(-Math.PI/2); et.translate(0, G.maxH, 0);
+      bg.add(new THREE.Mesh(et, mkMat(cols.faceC, fop*0.25)));
+      const er = new THREE.TorusGeometry(R, rw, 8, 64); er.rotateX(Math.PI/2); er.translate(0, G.maxH, 0);
+      bg.add(new THREE.Mesh(er, mkMat(cols.ringC, TH.rop*0.4)));
+    }
+    group.add(bg);
+  });
+}
+
+const anim = {active:false, t:0, drawTilt:null, phase:0};
+let curTilt = CONFIG.camera.tilt;
+let _mx=0,_my=0,_sx=0,_sy=0;
+const _TR=4;
+document.addEventListener('mousemove',e=>{
+  _mx=((e.clientX/window.innerWidth)-0.5)*2;
+  _my=((e.clientY/window.innerHeight)-0.5)*2;
+});
+function updateCam(){
+  let tiltDeg;
+  if (anim.drawTilt != null) tiltDeg = anim.drawTilt;
+  else if (anim.phase >= 2) tiltDeg = CONFIG.camera.tiltEnd;
+  else tiltDeg = curTilt;
+  const sm=0.08; _sx+=(_mx-_sx)*sm; _sy+=(_my-_sy)*sm;
+  const tr = tiltDeg*Math.PI/180 + _sy*_TR*Math.PI/180;
+  const or = CONFIG.camera.orbit*Math.PI/180 + _sx*_TR*Math.PI/180;
+  camera.position.set(Math.sin(or)*Math.cos(tr)*CONFIG.camera.distance, Math.sin(tr)*CONFIG.camera.distance, Math.cos(or)*Math.cos(tr)*CONFIG.camera.distance);
+  camera.lookAt(0, CONFIG.geometry.maxH*0.5, 0); camera.updateProjectionMatrix();
+}
+function tick(dt){
+  if (!anim.active) return;
+  const n = CONFIG.bars.length;
+  anim.t = Math.min(n + 0.5, anim.t + dt*CONFIG.animation.speed*1.5);
+  const progs = CONFIG.bars.map(bar => 0.01 + eio(clamp(anim.t, 0, 1))*(bar.pct/100 - 0.01));
+  const tiltProgress = eoutSoft(clamp(anim.t / (n + 0.5), 0, 1));
+  anim.drawTilt = CONFIG.camera.tiltStart + (CONFIG.camera.tiltEnd - CONFIG.camera.tiltStart)*tiltProgress;
+  buildAt(progs);
+  if (anim.t >= n + 0.5){anim.active = false; anim.phase = 2; anim.drawTilt = null; buildAt(null);}
+}
+
+function project(v3){
+  const c = v3.clone().project(camera);
+  const w = renderer.domElement.clientWidth, h = renderer.domElement.clientHeight;
+  return {x: (c.x*0.5+0.5)*w, y: (-c.y*0.5+0.5)*h, behind: c.z >= 1};
+}
+function rangeLabel(bar, prog, isAnimating){
+  if (isAnimating && anim.t < 0.05) return null;
+  const t = prog / (bar.pct/100);
+  const m = (bar.range || '').match(/(\d+)[–-](\d+)/);
+  if (!m) return Math.round(bar.pct*t) + '%';
+  const lo = +m[1], hi = +m[2];
+  const curLo = Math.round(lo*t), curHi = Math.round(hi*t);
+  if (t < 0.08) return curHi + '%';
+  return '~' + curLo + '–' + curHi + '%';
+}
+function drawLabels(currentProgs){
+  svg.innerHTML = '';
+  if (!CONFIG.labels.show) return;
+  const L = CONFIG.labels;
+  group.children.forEach((grp, i)=>{
+    const bar = CONFIG.bars[i]; if (!bar) return;
+    const curProg = currentProgs ? currentProgs[i] : bar.pct/100;
+    const fH = CONFIG.geometry.maxH*curProg;
+    const tp = new THREE.Vector3(0, fH, 0).applyMatrix4(grp.matrixWorld);
+    const p = project(tp);
+    const pt = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    pt.setAttribute('x', p.x); pt.setAttribute('y', p.y + L.offsetTop);
+    pt.setAttribute('text-anchor', 'middle'); pt.setAttribute('fill', PAL.g900);
+    pt.setAttribute('font-family', 'JetBrains Mono, monospace');
+    pt.setAttribute('font-size', L.size+5); pt.setAttribute('font-weight', '500'); pt.setAttribute('letter-spacing', '0.06em');
+    const labelText = rangeLabel(bar, curProg, !!currentProgs);
+    if (labelText){pt.textContent = labelText; svg.appendChild(pt);}
+    const bp = new THREE.Vector3(0, -0.12, 0).applyMatrix4(grp.matrixWorld);
+    const bprj = project(bp);
+    bar.label.split('\n').forEach((ln, li)=>{
+      const nt = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      nt.setAttribute('x', bprj.x); nt.setAttribute('y', bprj.y + L.offsetBot + li*L.size*1.3);
+      nt.setAttribute('text-anchor', 'middle'); nt.setAttribute('fill', PAL.g900);
+      nt.setAttribute('font-family', 'JetBrains Mono, monospace'); nt.setAttribute('font-size', L.size);
+      nt.setAttribute('letter-spacing', '0.06em'); nt.setAttribute('opacity', '0.75');
+      nt.textContent = ln; svg.appendChild(nt);
+    });
+  });
+}
+
+window.barPlay = function(){
+  anim.active = true; anim.t = 0; anim.drawTilt = null; anim.phase = 0;
+  buildAt(CONFIG.bars.map(()=>0.01));
+};
+const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+if (reduced){buildAt(null); scene.updateMatrixWorld(true); anim.phase = 2; drawLabels();}
+else {
+  buildAt(CONFIG.bars.map(()=>0.01));
+  let hasPlayed = false;
+  const io = new IntersectionObserver(entries=>{
+    entries.forEach(entry=>{if (entry.isIntersecting && !hasPlayed){hasPlayed = true; window.barPlay();}});
+  }, {threshold: 0.3});
+  io.observe(document.getElementById('bar-container'));
+}
+let lastT = performance.now();
+function loop(){
+  requestAnimationFrame(loop);
+  const now = performance.now(), dt = Math.min(0.1, (now-lastT)/1000); lastT = now;
+  tick(dt); updateCam(); renderer.render(scene, camera);
+  const n = CONFIG.bars.length;
+  const curProgs = anim.active ? CONFIG.bars.map(bar => 0.01 + eio(clamp(anim.t, 0, 1))*(bar.pct/100 - 0.01)) : null;
+  drawLabels(curProgs);
+}
+loop();
+</script>
+</body>
+</html>
